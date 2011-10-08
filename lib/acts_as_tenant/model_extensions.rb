@@ -2,88 +2,88 @@
 
 
 module ActsAsTenant
-  
+
   class << self
     cattr_accessor :tenant_class
     attr_accessor :current_tenant
   end
-  
+
   module ModelExtensions
     extend ActiveSupport::Concern
-  
+
     # Alias the v_uniqueness_of method so we can scope it to the current tenant when relevant
-  
+
     module ClassMethods
-    
+
       def acts_as_tenant(association = :account)
-        
+
         # Method that enables checking if a class is scoped by tenant
         def self.is_scoped_by_tenant?
           true
         end
-        
+
         ActsAsTenant.tenant_class ||= association
-        
+
         # Setup the association between the class and the tenant class
         belongs_to association
-      
+
         # get the tenant model and its foreign key
         reflection = reflect_on_association association
-        
-        # As the "foreign_key" method changed name in 3.1 we check for backward compatibility 
+
+        # As the "foreign_key" method changed name in 3.1 we check for backward compatibility
         if reflection.respond_to?(:foreign_key)
           fkey = reflection.foreign_key
         else
           fkey = reflection.association_foreign_key
         end
-    
+
         # set the current_tenant on newly created objects
         before_validation Proc.new {|m|
           return unless ActsAsTenant.current_tenant
           m.send "#{association}=".to_sym, ActsAsTenant.current_tenant
         }, :on => :create
-    
+
         # set the default_scope to scope to current tenant
         default_scope lambda {
           where({fkey => ActsAsTenant.current_tenant.id}) if ActsAsTenant.current_tenant
         }
-    
+
         # Rewrite accessors to make tenant foreign_key/association immutable
-        define_method "#{fkey}=" do |integer|  
+        define_method "#{fkey}=" do |integer|
           if new_record?
-            write_attribute(fkey, integer)  
+            write_attribute(fkey, integer)
           else
             raise "#{fkey} is immutable!"
-          end  
+          end
         end
-      
-        define_method "#{association}=" do |model|  
+
+        define_method "#{association}=" do |model|
           if new_record?
-            write_attribute(association, model)  
+            write_attribute(association, model)
           else
             raise "#{association} is immutable!"
-          end  
+          end
         end
-      
+
         # add validation of associations against tenant scope
-        # we can't do this for polymorphic associations so we 
+        # we can't do this for polymorphic associations so we
         # exempt them
         reflect_on_all_associations.each do |a|
-          unless a == reflection || a.macro == :has_many || a.options[:polymorphic]
+          unless a == reflection || a.macro == :has_many || a.macro == :has_one || a.options[:polymorphic]
             validates_each a.foreign_key.to_sym do |record, attr, value|
               record.errors.add attr, "is invalid" unless a.name.to_s.classify.constantize.where(:id => value).present?
             end
           end
-        end 
+        end
       end
-      
+
       def validates_uniqueness_to_tenant(fields, args ={})
         raise "ActsAsTenant::validates_uniqueness_to_tenant: no current tenant" unless respond_to?(:is_scoped_by_tenant?)
         tenant_id = lambda { "#{ActsAsTenant.tenant_class.to_s.downcase}_id"}.call
         args[:scope].nil? ? args[:scope] = tenant_id : args[:scope] << tenant_id
         validates_uniqueness_of(fields, args)
       end
-      
+
     end
   end
 end
